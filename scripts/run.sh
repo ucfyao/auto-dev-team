@@ -50,6 +50,10 @@ BACKEND_PROMPT=$(cat "$TOOL_DIR/agents/backend.md")
 FRONTEND_PROMPT=$(cat "$TOOL_DIR/agents/frontend.md")
 QA_PROMPT=$(cat "$TOOL_DIR/agents/qa.md")
 TEAM_CONFIG=$(cat "$TOOL_DIR/team.json")
+
+# Read engine definitions for prompt injection
+ENGINES=$(jq -r '.engines | to_entries[] | "- \(.key): \(.value.command) — \(.value.description)"' "$TOOL_DIR/team.json")
+
 FEATURES=$(cat "$FEATURE_LIST")
 
 # Write mega-prompt to temp file (avoids shell escaping + ARG_MAX issues)
@@ -102,14 +106,34 @@ $(cat "$TOOL_DIR/team.json")
 
 ## Agent Prompts (pass to sub-agents when spawning via Task tool)
 
-### Backend Agent Prompt
+### Backend Agent Prompt (Claude version — filter for other engines at dispatch time)
 $(cat "$TOOL_DIR/agents/backend.md")
 
-### Frontend Agent Prompt
+### Frontend Agent Prompt (Claude version — filter for other engines at dispatch time)
 $(cat "$TOOL_DIR/agents/frontend.md")
 
-### QA Agent Prompt
+### QA Agent Prompt (Claude version — filter for other engines at dispatch time)
 $(cat "$TOOL_DIR/agents/qa.md")
+
+---
+
+## Engine Configuration
+
+Available engines:
+$ENGINES
+
+Agent-to-engine mapping:
+$(jq -r '.agents[] | "- \(.name) (\(.role)): engine=\(.engine)"' "$TOOL_DIR/team.json")
+
+### How to dispatch to non-Claude engines
+
+When dispatching to an agent with engine != "claude", use the Bash tool to:
+1. Filter the agent prompt: \`$TOOL_DIR/scripts/filter-prompt.sh $TOOL_DIR/agents/<name>.md <engine>\`
+2. Write the filtered prompt + feature details to a temp file
+3. Call the engine CLI command (see engines above) with the temp file
+4. Check results per protocol §5b
+
+Feature-level override: if a feature has an \`engine\` field, use that instead of the agent's default.
 
 ---
 
