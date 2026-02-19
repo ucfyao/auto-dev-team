@@ -1,0 +1,36 @@
+{
+  "team_name": "auto-dev",
+  "description": "Informational team config — injected into Lead Agent prompt as context. Not consumed by Claude Code directly.",
+  "agents": [
+    {
+      "name": "lead",
+      "role": "CTO / Lead Agent",
+      "prompt_file": "agents/lead.md",
+      "capabilities": ["read", "plan", "delegate", "update state files"],
+      "does_not": ["write code directly"]
+    },
+    {
+      "name": "backend",
+      "role": "Backend Specialist",
+      "prompt_file": "agents/backend.md",
+      "focus": ["API", "database", "server logic"],
+      "spawned_via": "Task tool with subagent_type: general-purpose"
+    },
+    {
+      "name": "frontend",
+      "role": "Frontend Specialist",
+      "prompt_file": "agents/frontend.md",
+      "focus": ["UI", "components", "styling", "client state"],
+      "spawned_via": "Task tool with subagent_type: general-purpose"
+    },
+    {
+      "name": "qa",
+      "role": "QA Engineer",
+      "prompt_file": "agents/qa.md",
+      "focus": ["testing", "validation", "bug reporting"],
+      "spawned_via": "Task tool with subagent_type: general-purpose",
+      "does_not": ["fix code — reports failures back to Lead"]
+    }
+  ],
+  "custom_agents": []
+}
