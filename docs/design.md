@@ -2,42 +2,82 @@
 
 **Date:** 2026-02-19
 **Status:** Approved
-**Form:** GitHub template repository
+**Form:** Standalone tool (GitHub repo, works on any project)
 
 ## Overview
 
-A GitHub template repo that lets users fork, fill in a `feature_list.json` with 3-5 features, and run a single command to watch a Claude Code Agent Team autonomously build the project — with a Lead Agent orchestrating specialized Backend, Frontend, and QA agents.
+A standalone CLI tool that orchestrates a Claude Code Agent Team to autonomously build features for any target project. Users clone the tool once, register target projects, fill in a `feature_list.json`, and run a single command — the tool handles everything else.
+
+The tool lives separately from target projects. Zero file pollution.
 
 ## Goals
 
-- Zero external dependencies beyond Claude Code CLI
-- Fork → fill features → run → watch agents build code
+- Zero external dependencies beyond Claude Code CLI and jq
+- Clone once → register project → fill features → run
+- Works on any target project regardless of tech stack
 - Ships with a working TODO app demo (5 pre-filled features)
 - Preset roles (Lead, Backend, Frontend, QA) + custom role support
+- Target project stays 100% clean — no auto-dev files injected
 
 ## Repo Structure
 
 ```
 auto-dev-team/
-├── CLAUDE.md                         # Autonomous dev protocol (read on every session)
-├── feature_list.json                 # Task queue (state machine core)
-├── progress.log                      # Handoff log between sessions
-├── team.json                         # Agent Team role configuration
-├── .claude/
-│   ├── settings.local.json           # Claude Code permission config
-│   └── agents/                       # Role system prompts
-│       ├── lead.md                   # CTO / Lead Agent
-│       ├── backend.md                # Backend specialist
-│       ├── frontend.md               # Frontend specialist
-│       └── qa.md                     # QA engineer
+├── agents/                         # Agent system prompts
+│   ├── lead.md                     # CTO / Lead Agent
+│   ├── backend.md                  # Backend specialist
+│   ├── frontend.md                 # Frontend specialist
+│   └── qa.md                       # QA engineer
+├── protocol.md                     # Master autonomous dev protocol
+├── team.json                       # Default team config
+├── projects/                       # Per-project state directories
+│   └── <project-name>/
+│       ├── config.json             # { "target": "/absolute/path/to/project" }
+│       ├── feature_list.json       # Task queue for this project
+│       └── progress.log            # Handoff log for this project
 ├── scripts/
-│   ├── run.sh                        # One-click start (calls claude CLI)
-│   └── init.sh                       # Environment check
+│   ├── run.sh                      # Main entry: ./scripts/run.sh <project-name>
+│   ├── init-project.sh             # Setup: ./scripts/init-project.sh <name> <path>
+│   └── check-env.sh               # Environment check
 ├── examples/
-│   └── todo-app/                     # Ready-to-run demo
-│       ├── feature_list.json         # 5 pre-filled features
-│       └── README.md                 # Demo instructions
-└── README.md                         # Template usage guide
+│   └── todo-app/
+│       ├── feature_list.json       # 5 pre-filled features
+│       └── README.md               # Demo instructions
+├── README.md
+└── .gitignore
+```
+
+## Workflow
+
+```bash
+# 1. Clone (one-time setup)
+git clone https://github.com/you/auto-dev-team ~/tools/auto-dev-team
+cd ~/tools/auto-dev-team
+
+# 2. Register a target project
+./scripts/init-project.sh my-app /Users/me/code/my-app
+
+# 3. Fill in features
+vim projects/my-app/feature_list.json
+
+# 4. Run
+./scripts/run.sh my-app
+```
+
+## How run.sh Works
+
+```
+./scripts/run.sh my-app
+
+  1. Read projects/my-app/config.json → get target project path
+  2. Read projects/my-app/feature_list.json → get tasks
+  3. Read protocol.md + agents/lead.md → assemble mega-prompt
+  4. Run check-env.sh against target project
+  5. cd into target project directory
+  6. Launch: claude --dangerously-skip-permissions -p "<assembled prompt>"
+  7. Lead Agent uses TeamCreate + Task to spawn specialists
+  8. Agents work in target project, state files accessed via absolute paths
+  9. On completion: feature_list.json and progress.log updated in projects/my-app/
 ```
 
 ## Core State Machine: feature_list.json
@@ -95,7 +135,7 @@ pending → in_progress → testing → completed
 - Lead Agent sorts by `priority` + `depends_on` to determine next executable task
 - Agent claims task: sets `status: in_progress` + `assigned_to`
 - On completion: `status: testing`, QA Agent validates, then `passes: true` + `status: completed`
-- On failure: Git rollback, `attempts += 1`, back to `pending`
+- On failure: Git rollback in target project, `attempts += 1`, back to `pending`
 
 ## Agent Team Architecture
 
@@ -108,31 +148,31 @@ pending → in_progress → testing → completed
     {
       "name": "lead",
       "role": "CTO / Lead Agent",
-      "prompt_file": ".claude/agents/lead.md",
+      "prompt_file": "agents/lead.md",
       "capabilities": ["read", "plan", "delegate"],
       "does_not": ["write code directly"]
     },
     {
       "name": "backend",
       "role": "Backend Specialist",
-      "prompt_file": ".claude/agents/backend.md",
+      "prompt_file": "agents/backend.md",
       "focus": ["API", "database", "server logic"],
       "tools": ["Edit", "Write", "Bash", "Grep", "Glob", "Read"]
     },
     {
       "name": "frontend",
       "role": "Frontend Specialist",
-      "prompt_file": ".claude/agents/frontend.md",
+      "prompt_file": "agents/frontend.md",
       "focus": ["UI", "components", "styling", "client state"],
       "tools": ["Edit", "Write", "Bash", "Grep", "Glob", "Read"]
     },
     {
       "name": "qa",
       "role": "QA Engineer",
-      "prompt_file": ".claude/agents/qa.md",
+      "prompt_file": "agents/qa.md",
       "focus": ["testing", "validation", "bug reporting"],
       "tools": ["Bash", "Read", "Grep", "Glob"],
-      "does_not": ["fix code — reports back to responsible agent"]
+      "does_not": ["fix code — reports failures back to responsible agent"]
     }
   ],
   "custom_agents": []
@@ -143,11 +183,11 @@ pending → in_progress → testing → completed
 
 **Lead Agent (CTO):**
 
-1. On startup: read `feature_list.json` + `progress.log`
-2. Sort executable tasks by priority and dependency resolution
-3. Use `TeamCreate` to initialize the team, `SendMessage` to dispatch tasks
+1. Receives the assembled prompt with protocol + features + state paths
+2. Sorts executable tasks by priority and dependency resolution
+3. Uses TeamCreate to initialize the team, Task tool to spawn specialists
 4. Does NOT write code — only reviews and coordinates
-5. Updates `feature_list.json` and `progress.log` on task completion
+5. Updates feature_list.json and progress.log via absolute paths
 
 **Backend Agent:**
 
@@ -165,22 +205,30 @@ pending → in_progress → testing → completed
 
 - Picks up tasks with `status: testing`
 - Runs test commands (unit tests, E2E, curl validation)
-- Does NOT fix code. Reports failures via `SendMessage` to the responsible agent
+- Does NOT fix code. Reports failures to the responsible agent
 - On pass: updates `passes: true`
 
 **Custom Roles:**
 
 - Users add entries to `custom_agents` in `team.json`
-- Create a matching `.md` prompt file in `.claude/agents/`
+- Create matching `.md` prompt files in `agents/`
 - Lead Agent routes tasks by matching `category` to agent name
+
+## Key Design Decisions
+
+1. **Separate from target project** — auto-dev-team never writes files into the target project's config. All orchestration state lives in `projects/<name>/`.
+2. **Absolute paths for state** — run.sh resolves all paths to absolute before injecting into the prompt, so agents can read/write state files regardless of CWD.
+3. **Prompt injection over file injection** — protocol and agent prompts are assembled into the mega-prompt by run.sh, not copied into the target project.
+4. **Per-project isolation** — each registered project has its own state directory. You can manage multiple projects concurrently.
 
 ## Success Criteria
 
-- User forks the template repo
-- Fills in 3-5 features in `feature_list.json` (or uses the TODO app example)
-- Runs `./scripts/run.sh`
+- User clones auto-dev-team
+- Runs `./scripts/init-project.sh todo-demo /tmp/todo-demo` (or any target path)
+- Copies the example feature list: `cp examples/todo-app/feature_list.json projects/todo-demo/`
+- Runs `./scripts/run.sh todo-demo`
 - Observes Agent Team: Lead dispatches tasks → Backend/Frontend build code → QA validates
-- All features reach `status: completed` with generated, working code
+- All features reach `status: completed` with generated, working code in the target project
 
 ## Non-Goals
 

@@ -2,20 +2,20 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Build a GitHub template repo where users fork, fill `feature_list.json`, and run one command to watch a Claude Code Agent Team autonomously build their project.
+**Goal:** Build a standalone tool that orchestrates a Claude Code Agent Team to autonomously develop features in any target project.
 
-**Architecture:** Pure Claude Code Native — zero external dependencies beyond Claude Code CLI. File-based state machine (`feature_list.json`) drives task dispatch. `.claude/agents/*.md` defines specialized roles. Shell scripts handle startup and environment checks.
+**Architecture:** Standalone repo with shell scripts that assemble protocol + features into a mega-prompt, cd into the target project, and launch Claude Code. State files live in the tool's `projects/` directory, accessed via absolute paths.
 
-**Tech Stack:** Claude Code CLI, Bash, JSON
+**Tech Stack:** Claude Code CLI, Bash, jq, JSON
 
 ---
 
-### Task 1: Project scaffolding — .gitignore and empty progress.log
+### Task 1: Project scaffolding
 
 **Files:**
 
 - Create: `.gitignore`
-- Create: `progress.log`
+- Create: `projects/.gitkeep`
 
 **Step 1: Create .gitignore**
 
@@ -23,61 +23,35 @@
 node_modules/
 .env
 .env.local
-*.log
-!progress.log
 .DS_Store
+
+# Keep project state directories but ignore generated logs
+# (progress.log is tracked per-project)
 ```
 
-**Step 2: Create empty progress.log**
+**Step 2: Create projects directory placeholder**
 
-```
-# Auto-Dev-Team Progress Log
-# Each session appends entries here for cross-session context handoff.
+```bash
+mkdir -p projects
+touch projects/.gitkeep
 ```
 
 **Step 3: Commit**
 
 ```bash
-git add .gitignore progress.log
-git commit -m "chore: add gitignore and progress log"
+git add .gitignore projects/.gitkeep
+git commit -m "chore: initial project scaffolding"
 ```
 
 ---
 
-### Task 2: Core state machine — feature_list.json template
-
-**Files:**
-
-- Create: `feature_list.json`
-
-**Step 1: Create the empty template feature list**
-
-```json
-{
-  "project": "my-project",
-  "version": "3.0",
-  "features": []
-}
-```
-
-This is the user-facing template. Empty `features` array — users fill this in after forking.
-
-**Step 2: Commit**
-
-```bash
-git add feature_list.json
-git commit -m "feat: add feature_list.json state machine template"
-```
-
----
-
-### Task 3: Agent Team config — team.json
+### Task 2: Default team config — team.json
 
 **Files:**
 
 - Create: `team.json`
 
-**Step 1: Create team.json with preset roles + custom slot**
+**Step 1: Create team.json**
 
 ```json
 {
@@ -86,28 +60,28 @@ git commit -m "feat: add feature_list.json state machine template"
     {
       "name": "lead",
       "role": "CTO / Lead Agent",
-      "prompt_file": ".claude/agents/lead.md",
+      "prompt_file": "agents/lead.md",
       "capabilities": ["read", "plan", "delegate"],
       "does_not": ["write code directly"]
     },
     {
       "name": "backend",
       "role": "Backend Specialist",
-      "prompt_file": ".claude/agents/backend.md",
+      "prompt_file": "agents/backend.md",
       "focus": ["API", "database", "server logic"],
       "tools": ["Edit", "Write", "Bash", "Grep", "Glob", "Read"]
     },
     {
       "name": "frontend",
       "role": "Frontend Specialist",
-      "prompt_file": ".claude/agents/frontend.md",
+      "prompt_file": "agents/frontend.md",
       "focus": ["UI", "components", "styling", "client state"],
       "tools": ["Edit", "Write", "Bash", "Grep", "Glob", "Read"]
     },
     {
       "name": "qa",
       "role": "QA Engineer",
-      "prompt_file": ".claude/agents/qa.md",
+      "prompt_file": "agents/qa.md",
       "focus": ["testing", "validation", "bug reporting"],
       "tools": ["Bash", "Read", "Grep", "Glob"],
       "does_not": ["fix code — reports failures back to responsible agent"]
@@ -121,254 +95,473 @@ git commit -m "feat: add feature_list.json state machine template"
 
 ```bash
 git add team.json
-git commit -m "feat: add team.json agent team configuration"
+git commit -m "feat: add default team configuration"
 ```
 
 ---
 
-### Task 4: Lead Agent system prompt
+### Task 3: Master protocol — protocol.md
 
 **Files:**
 
-- Create: `.claude/agents/lead.md`
+- Create: `protocol.md`
 
-**Step 1: Write lead.md**
+**Step 1: Write protocol.md**
 
-This is the CTO prompt. It must instruct the Lead Agent on the full startup sequence, task dispatch logic, and completion protocol. Reference the design doc section "CLAUDE.md Protocol" for the exact rules.
+This is the core autonomous development protocol that gets injected into the Lead Agent's prompt by run.sh. It must contain:
 
-Key behaviors to encode:
+1. **Role Definition** — You are the Lead Agent (CTO). You orchestrate, you do not code.
+2. **State Files** — Absolute paths to feature_list.json and progress.log (injected by run.sh as `{{FEATURE_LIST_PATH}}` and `{{PROGRESS_LOG_PATH}}` placeholders).
+3. **Task Dispatch Rules**:
+   - Read feature_list.json
+   - Filter: `status === "pending"` AND all `depends_on` IDs are `completed`
+   - Sort by `priority` ascending
+   - Match `category` to agent name
+   - One task per agent at a time
+4. **Agent Spawning** — Use `TeamCreate` to create team, then `Task` tool with `subagent_type: "general-purpose"` for each specialist. Include the specialist's prompt from `agents/*.md` content (injected by run.sh).
+5. **Status Transitions**:
+   - Lead assigns → `status: "in_progress"`, `assigned_to: "<agent>"`
+   - Agent completes → `status: "testing"`
+   - QA passes → `passes: true`, `status: "completed"`, `completed_at: "<date>"`
+   - QA fails → `status: "failed"`, send error to responsible agent
+   - Retry logic: `attempts += 1`, if < max_attempts reset to `pending`, else `blocked`
+6. **Git Safety**:
+   - Branch per feature: `git checkout -b feature/F-XXX`
+   - Commit format: `feat(F-XXX): <title>`
+   - On failure: `git checkout main && git branch -D feature/F-XXX`
+   - Never force push or rewrite history
+7. **Progress Logging** — After each task completion/failure, append a line to progress.log with timestamp, feature ID, and outcome.
+8. **Completion** — When all features are `completed` or `blocked`, write a summary to progress.log and stop.
 
-- Read `feature_list.json`, `progress.log`, `team.json` on startup
-- Sort tasks by priority, resolve dependency chains
-- Use `TeamCreate` to spawn the team
-- Use `Task` tool (subagent_type: `general-purpose`) to spawn specialists with their `.claude/agents/*.md` prompt as system instructions
-- Dispatch one task at a time per agent
-- Update `feature_list.json` status fields after each task
-- On failure: rollback git, increment attempts, log to progress.log
-- On all features completed: write summary to progress.log
+The file should be ~100-120 lines. Use `{{PLACEHOLDER}}` syntax for values that run.sh will substitute at runtime:
 
-The prompt should be ~80-120 lines of clear, imperative instructions.
+- `{{FEATURE_LIST_PATH}}` — absolute path to feature_list.json
+- `{{PROGRESS_LOG_PATH}}` — absolute path to progress.log
+- `{{TARGET_PROJECT_PATH}}` — absolute path to target project
+- `{{AGENT_PROMPTS}}` — assembled agent prompt content
 
 **Step 2: Commit**
 
 ```bash
-git add .claude/agents/lead.md
-git commit -m "feat: add lead agent (CTO) system prompt"
+git add protocol.md
+git commit -m "feat: add master autonomous development protocol"
 ```
 
 ---
 
-### Task 5: Backend Agent system prompt
+### Task 4: Lead Agent prompt — agents/lead.md
 
 **Files:**
 
-- Create: `.claude/agents/backend.md`
+- Create: `agents/lead.md`
 
-**Step 1: Write backend.md**
+**Step 1: Write agents/lead.md**
 
-Key behaviors:
+This prompt wraps protocol.md with the Lead Agent's specific persona and instructions. It should be short (~30 lines) since the bulk of logic is in protocol.md which gets injected alongside it.
 
-- Receives task from Lead with feature ID, title, description
-- Works only on server-side code (API routes, database, business logic)
-- Creates a feature branch: `git checkout -b feature/F-XXX`
-- Writes implementation code
-- Runs any available test commands
-- Commits with format: `feat(F-XXX): <title>`
-- Notifies Lead on completion via SendMessage
-- On error: does NOT silently continue — reports the error clearly
+Key content:
 
-The prompt should be ~40-60 lines.
+- You are the CTO of this project
+- Your job: read the protocol, dispatch tasks, review results, update state
+- You NEVER write implementation code directly
+- You use TeamCreate + Task tool to spawn specialists
+- After spawning, monitor progress and update feature_list.json
+- Coordinate between agents when tasks have cross-cutting concerns
 
 **Step 2: Commit**
 
 ```bash
-git add .claude/agents/backend.md
+git add agents/lead.md
+git commit -m "feat: add lead agent system prompt"
+```
+
+---
+
+### Task 5: Backend Agent prompt — agents/backend.md
+
+**Files:**
+
+- Create: `agents/backend.md`
+
+**Step 1: Write agents/backend.md**
+
+~40-50 lines. Key behaviors:
+
+- You are a Backend Specialist
+- You receive a task with: feature ID, title, description, target project path
+- Create a feature branch: `git checkout -b feature/F-XXX`
+- Focus exclusively on server-side code: API routes, database, business logic, server config
+- Do NOT touch client-side files (HTML, CSS, React components, etc.)
+- Write clean, well-structured code following the target project's existing patterns
+- Run any available test commands after implementation
+- Commit with format: `feat(F-XXX): <title>`
+- Report completion or errors clearly — never silently fail
+
+**Step 2: Commit**
+
+```bash
+git add agents/backend.md
 git commit -m "feat: add backend specialist agent prompt"
 ```
 
 ---
 
-### Task 6: Frontend Agent system prompt
+### Task 6: Frontend Agent prompt — agents/frontend.md
 
 **Files:**
 
-- Create: `.claude/agents/frontend.md`
+- Create: `agents/frontend.md`
 
-**Step 1: Write frontend.md**
+**Step 1: Write agents/frontend.md**
 
-Key behaviors:
+~40-50 lines. Same structure as backend.md but:
 
-- Same structure as backend.md but focused on client-side code
-- Components, styling, state management, API consumption
-- Same branch/commit/notify conventions
-- Does NOT touch server-side files
-
-The prompt should be ~40-60 lines.
+- Focus on client-side: UI components, styling, state management, API consumption
+- Do NOT touch server-side files (API routes, database, server config)
+- Match existing UI patterns and styling conventions in the target project
 
 **Step 2: Commit**
 
 ```bash
-git add .claude/agents/frontend.md
+git add agents/frontend.md
 git commit -m "feat: add frontend specialist agent prompt"
 ```
 
 ---
 
-### Task 7: QA Agent system prompt
+### Task 7: QA Agent prompt — agents/qa.md
 
 **Files:**
 
-- Create: `.claude/agents/qa.md`
+- Create: `agents/qa.md`
 
-**Step 1: Write qa.md**
+**Step 1: Write agents/qa.md**
 
-Key behaviors:
+~40-50 lines. Key behaviors:
 
-- Picks up tasks with `status: testing`
-- Runs test/validation commands (unit tests, curl, E2E)
-- Has read-only + bash access — cannot Edit or Write code files
-- If tests pass: reports success to Lead
-- If tests fail: sends detailed error report to the responsible agent (backend or frontend) via SendMessage — does NOT attempt to fix code
-- Updates `passes` field
-
-The prompt should be ~40-60 lines.
+- You are a QA Engineer
+- You receive tasks with `status: testing` from the Lead
+- Run validation: unit tests, integration tests, curl commands, E2E tests — whatever is appropriate
+- You do NOT modify source code. You only read code and run tests.
+- If tests pass: report success to Lead with details
+- If tests fail: send detailed error report (command, expected, actual, stack trace) to the responsible agent. Do NOT attempt to fix it yourself.
+- Be specific in error reports — include file paths, line numbers, exact error messages
 
 **Step 2: Commit**
 
 ```bash
-git add .claude/agents/qa.md
+git add agents/qa.md
 git commit -m "feat: add QA engineer agent prompt"
 ```
 
 ---
 
-### Task 8: Claude Code settings
+### Task 8: Environment check script — check-env.sh
 
 **Files:**
 
-- Create: `.claude/settings.local.json`
+- Create: `scripts/check-env.sh`
 
-**Step 1: Write settings.local.json**
-
-```json
-{
-  "permissions": {
-    "allow": [
-      "Bash(git *)",
-      "Bash(npm *)",
-      "Bash(npx *)",
-      "Bash(node *)",
-      "Bash(curl *)",
-      "Bash(source *)",
-      "Bash(chmod *)",
-      "Bash(cat *)",
-      "Bash(ls *)",
-      "Bash(mkdir *)"
-    ]
-  }
-}
-```
-
-**Step 2: Commit**
-
-```bash
-git add .claude/settings.local.json
-git commit -m "chore: add Claude Code permission settings"
-```
-
----
-
-### Task 9: Environment check script — init.sh
-
-**Files:**
-
-- Create: `scripts/init.sh`
-
-**Step 1: Write init.sh**
+**Step 1: Write scripts/check-env.sh**
 
 ```bash
 #!/bin/bash
 set -e
 
+TOOL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+PROJECT_NAME="$1"
+
 echo "=== Auto-Dev-Team Environment Check ==="
 
-# Check Claude Code CLI
+# Check dependencies
 if ! command -v claude &> /dev/null; then
     echo "ERROR: Claude Code CLI not found."
     echo "Install: npm install -g @anthropic-ai/claude-code"
     exit 1
 fi
 
-# Check Git
-if ! git rev-parse --git-dir &> /dev/null; then
-    echo "ERROR: Not a git repository. Run 'git init' first."
+if ! command -v jq &> /dev/null; then
+    echo "ERROR: jq not found."
+    echo "Install: brew install jq (macOS) or apt install jq (Linux)"
     exit 1
 fi
 
-# Check required files
-missing=0
-for f in feature_list.json team.json progress.log; do
-    if [ ! -f "$f" ]; then
-        echo "ERROR: Missing required file: $f"
-        missing=1
-    fi
-done
-if [ $missing -eq 1 ]; then
+if ! command -v git &> /dev/null; then
+    echo "ERROR: git not found."
     exit 1
 fi
 
-# Check feature_list has features
-feature_count=$(node -e "const f=require('./feature_list.json'); console.log(f.features.length)" 2>/dev/null || echo "0")
-if [ "$feature_count" = "0" ]; then
-    echo "WARNING: feature_list.json has no features. Add features before running."
+# Check project config exists
+if [ -z "$PROJECT_NAME" ]; then
+    echo "ERROR: No project name provided."
+    echo "Usage: $0 <project-name>"
     exit 1
 fi
 
-# Check git status
-if [ -n "$(git status --porcelain)" ]; then
-    echo "WARNING: Uncommitted changes detected. Stashing..."
-    git stash
+PROJECT_DIR="$TOOL_DIR/projects/$PROJECT_NAME"
+if [ ! -d "$PROJECT_DIR" ]; then
+    echo "ERROR: Project '$PROJECT_NAME' not found in projects/"
+    echo "Run: ./scripts/init-project.sh $PROJECT_NAME /path/to/project"
+    exit 1
 fi
 
-echo "=== Environment OK ($feature_count features loaded) ==="
+# Check config.json
+CONFIG="$PROJECT_DIR/config.json"
+if [ ! -f "$CONFIG" ]; then
+    echo "ERROR: Missing $CONFIG"
+    exit 1
+fi
+
+TARGET=$(jq -r '.target' "$CONFIG")
+if [ ! -d "$TARGET" ]; then
+    echo "ERROR: Target project directory not found: $TARGET"
+    exit 1
+fi
+
+# Check feature_list.json
+FEATURES="$PROJECT_DIR/feature_list.json"
+if [ ! -f "$FEATURES" ]; then
+    echo "ERROR: Missing $FEATURES"
+    echo "Create it or copy from examples/todo-app/feature_list.json"
+    exit 1
+fi
+
+FEATURE_COUNT=$(jq '.features | length' "$FEATURES")
+if [ "$FEATURE_COUNT" = "0" ]; then
+    echo "ERROR: feature_list.json has no features. Add features before running."
+    exit 1
+fi
+
+# Check target is a git repo
+if ! git -C "$TARGET" rev-parse --git-dir &> /dev/null; then
+    echo "WARNING: Target project is not a git repo. Initializing..."
+    git -C "$TARGET" init
+fi
+
+# Check target git status
+if [ -n "$(git -C "$TARGET" status --porcelain)" ]; then
+    echo "WARNING: Target project has uncommitted changes. Stashing..."
+    git -C "$TARGET" stash
+fi
+
+echo "=== Environment OK ==="
+echo "  Tool dir:    $TOOL_DIR"
+echo "  Project:     $PROJECT_NAME"
+echo "  Target:      $TARGET"
+echo "  Features:    $FEATURE_COUNT"
 ```
 
 **Step 2: Make executable**
 
 ```bash
-chmod +x scripts/init.sh
+chmod +x scripts/check-env.sh
 ```
 
 **Step 3: Commit**
 
 ```bash
-git add scripts/init.sh
+git add scripts/check-env.sh
 git commit -m "feat: add environment check script"
 ```
 
 ---
 
-### Task 10: One-click start script — run.sh
+### Task 9: Project init script — init-project.sh
 
 **Files:**
 
-- Create: `scripts/run.sh`
+- Create: `scripts/init-project.sh`
 
-**Step 1: Write run.sh**
+**Step 1: Write scripts/init-project.sh**
 
 ```bash
 #!/bin/bash
 set -e
 
-# Run environment check
-source "$(dirname "$0")/init.sh" || exit 1
+TOOL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+PROJECT_NAME="$1"
+TARGET_PATH="$2"
+
+if [ -z "$PROJECT_NAME" ] || [ -z "$TARGET_PATH" ]; then
+    echo "Usage: $0 <project-name> <target-project-path>"
+    echo ""
+    echo "Example:"
+    echo "  $0 my-app /Users/me/code/my-app"
+    exit 1
+fi
+
+# Resolve to absolute path
+TARGET_PATH="$(cd "$TARGET_PATH" 2>/dev/null && pwd || echo "$TARGET_PATH")"
+
+PROJECT_DIR="$TOOL_DIR/projects/$PROJECT_NAME"
+
+if [ -d "$PROJECT_DIR" ]; then
+    echo "ERROR: Project '$PROJECT_NAME' already exists at $PROJECT_DIR"
+    exit 1
+fi
+
+echo "Initializing project: $PROJECT_NAME"
+echo "  Target: $TARGET_PATH"
+
+mkdir -p "$PROJECT_DIR"
+
+# Create config.json
+cat > "$PROJECT_DIR/config.json" << EOF
+{
+  "target": "$TARGET_PATH",
+  "name": "$PROJECT_NAME",
+  "created_at": "$(date '+%Y-%m-%d')"
+}
+EOF
+
+# Create empty feature list
+cat > "$PROJECT_DIR/feature_list.json" << 'EOF'
+{
+  "project": "PROJECT_NAME_PLACEHOLDER",
+  "version": "3.0",
+  "features": []
+}
+EOF
+sed -i '' "s/PROJECT_NAME_PLACEHOLDER/$PROJECT_NAME/" "$PROJECT_DIR/feature_list.json" 2>/dev/null || \
+sed -i "s/PROJECT_NAME_PLACEHOLDER/$PROJECT_NAME/" "$PROJECT_DIR/feature_list.json"
+
+# Create progress log
+echo "# Progress Log: $PROJECT_NAME" > "$PROJECT_DIR/progress.log"
+echo "# Target: $TARGET_PATH" >> "$PROJECT_DIR/progress.log"
+echo "$(date '+%Y-%m-%d %H:%M:%S'): Project initialized" >> "$PROJECT_DIR/progress.log"
+
+echo ""
+echo "Project '$PROJECT_NAME' initialized."
+echo ""
+echo "Next steps:"
+echo "  1. Edit: projects/$PROJECT_NAME/feature_list.json"
+echo "     Add your features to the 'features' array."
+echo "  2. Run:  ./scripts/run.sh $PROJECT_NAME"
+```
+
+**Step 2: Make executable**
+
+```bash
+chmod +x scripts/init-project.sh
+```
+
+**Step 3: Commit**
+
+```bash
+git add scripts/init-project.sh
+git commit -m "feat: add project initialization script"
+```
+
+---
+
+### Task 10: Main entry script — run.sh
+
+**Files:**
+
+- Create: `scripts/run.sh`
+
+**Step 1: Write scripts/run.sh**
+
+This is the core orchestration script. It:
+
+1. Runs check-env.sh
+2. Reads config, features, protocol, and agent prompts
+3. Substitutes placeholders in protocol.md
+4. Assembles a mega-prompt
+5. cd into target project
+6. Launches Claude Code with the mega-prompt
+
+```bash
+#!/bin/bash
+set -e
+
+TOOL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+PROJECT_NAME="$1"
+
+# Environment check
+source "$TOOL_DIR/scripts/check-env.sh" "$PROJECT_NAME"
+
+# Read paths
+PROJECT_DIR="$TOOL_DIR/projects/$PROJECT_NAME"
+CONFIG="$PROJECT_DIR/config.json"
+TARGET=$(jq -r '.target' "$CONFIG")
+FEATURE_LIST="$PROJECT_DIR/feature_list.json"
+PROGRESS_LOG="$PROJECT_DIR/progress.log"
+
+# Read protocol and agent prompts
+PROTOCOL=$(cat "$TOOL_DIR/protocol.md")
+LEAD_PROMPT=$(cat "$TOOL_DIR/agents/lead.md")
+BACKEND_PROMPT=$(cat "$TOOL_DIR/agents/backend.md")
+FRONTEND_PROMPT=$(cat "$TOOL_DIR/agents/frontend.md")
+QA_PROMPT=$(cat "$TOOL_DIR/agents/qa.md")
+TEAM_CONFIG=$(cat "$TOOL_DIR/team.json")
+
+# Read current features
+FEATURES=$(cat "$FEATURE_LIST")
+
+# Substitute placeholders in protocol
+PROTOCOL="${PROTOCOL//\{\{FEATURE_LIST_PATH\}\}/$FEATURE_LIST}"
+PROTOCOL="${PROTOCOL//\{\{PROGRESS_LOG_PATH\}\}/$PROGRESS_LOG}"
+PROTOCOL="${PROTOCOL//\{\{TARGET_PROJECT_PATH\}\}/$TARGET}"
+
+# Assemble mega-prompt
+MEGA_PROMPT="$LEAD_PROMPT
+
+---
+
+## Protocol
+
+$PROTOCOL
+
+---
+
+## Current Feature List
+
+\`\`\`json
+$FEATURES
+\`\`\`
+
+Feature list file (read/write): $FEATURE_LIST
+Progress log file (append): $PROGRESS_LOG
+Target project directory: $TARGET
+
+---
+
+## Team Configuration
+
+\`\`\`json
+$TEAM_CONFIG
+\`\`\`
+
+---
+
+## Agent Prompts (use when spawning specialists)
+
+### Backend Agent Prompt
+$BACKEND_PROMPT
+
+### Frontend Agent Prompt
+$FRONTEND_PROMPT
+
+### QA Agent Prompt
+$QA_PROMPT
+
+---
+
+Begin execution now. Follow the protocol exactly."
+
+# Log session start
+echo "$(date '+%Y-%m-%d %H:%M:%S'): Session started" >> "$PROGRESS_LOG"
 
 echo ""
 echo "Starting Auto-Dev-Team v3.0..."
-echo "$(date '+%Y-%m-%d %H:%M:%S'): Session started" >> progress.log
+echo "  Project: $PROJECT_NAME"
+echo "  Target:  $TARGET"
+echo ""
 
-claude --dangerously-skip-permissions \
-  -p "You are the Lead Agent of the Auto-Dev-Team system. Execute the startup sequence defined in CLAUDE.md exactly. Read feature_list.json, progress.log, and team.json, then initialize the Agent Team and begin dispatching tasks."
+# Launch Claude Code in target project directory
+cd "$TARGET"
+claude --dangerously-skip-permissions -p "$MEGA_PROMPT"
 ```
 
 **Step 2: Make executable**
@@ -381,40 +574,12 @@ chmod +x scripts/run.sh
 
 ```bash
 git add scripts/run.sh
-git commit -m "feat: add one-click start script"
+git commit -m "feat: add main entry run script"
 ```
 
 ---
 
-### Task 11: CLAUDE.md — Autonomous dev protocol
-
-**Files:**
-
-- Create: `CLAUDE.md`
-
-**Step 1: Write CLAUDE.md**
-
-This is the master protocol file that Claude Code reads on every session. It must contain:
-
-1. **Startup Sequence** — exact ordered steps (run init.sh, read state files, init team, dispatch)
-2. **Task Dispatch Rules** — priority sorting, dependency resolution, category-to-agent matching
-3. **Completion Protocol** — status transitions, QA handoff, failure handling
-4. **Git Safety Rules** — branch-per-feature, commit format, rollback on failure
-5. **State Update Rules** — how to read/write feature_list.json atomically
-6. **Progress Logging** — what to log and when
-
-Reference the design doc for exact content. The file should be ~100-150 lines of clear, imperative protocol.
-
-**Step 2: Commit**
-
-```bash
-git add CLAUDE.md
-git commit -m "feat: add CLAUDE.md autonomous development protocol"
-```
-
----
-
-### Task 12: Example demo — TODO app feature list
+### Task 11: Example — TODO app feature list
 
 **Files:**
 
@@ -431,7 +596,7 @@ git commit -m "feat: add CLAUDE.md autonomous development protocol"
       "id": "F-001",
       "category": "backend",
       "title": "Initialize Express server",
-      "description": "Create a basic Express.js server with GET /health endpoint on port 3000. Install express as dependency. Create src/index.js as entry point.",
+      "description": "Create a basic Express.js server with GET /health endpoint on port 3000. Run npm init -y and install express. Create src/index.js as entry point.",
       "status": "pending",
       "assigned_to": null,
       "depends_on": [],
@@ -463,7 +628,7 @@ git commit -m "feat: add CLAUDE.md autonomous development protocol"
       "id": "F-003",
       "category": "frontend",
       "title": "Todo list UI",
-      "description": "Create public/index.html with a form (text input + submit button) to add todos and an unordered list to display them. Use vanilla JS fetch to call GET /api/todos on load and POST /api/todos on submit. Serve static files from Express.",
+      "description": "Create public/index.html with a form (text input + submit button) to add todos and an unordered list to display them. Use vanilla JS fetch to call GET /api/todos on load and POST /api/todos on submit. Configure Express to serve static files from public/.",
       "status": "pending",
       "assigned_to": null,
       "depends_on": ["F-002"],
@@ -479,7 +644,7 @@ git commit -m "feat: add CLAUDE.md autonomous development protocol"
       "id": "F-004",
       "category": "frontend",
       "title": "Toggle and delete UI",
-      "description": "Add a checkbox per todo item to toggle completion (calls PUT /api/todos/:id). Add a delete button per item (calls DELETE /api/todos/:id). Refresh the list after each action. Style completed todos with line-through.",
+      "description": "Add a checkbox per todo item to toggle completion (calls PUT /api/todos/:id). Add a delete button per item (calls DELETE /api/todos/:id). Refresh the list after each action. Style completed todos with line-through text decoration.",
       "status": "pending",
       "assigned_to": null,
       "depends_on": ["F-003"],
@@ -495,7 +660,7 @@ git commit -m "feat: add CLAUDE.md autonomous development protocol"
       "id": "F-005",
       "category": "qa",
       "title": "End-to-end validation",
-      "description": "Verify all CRUD operations work via curl commands: 1) GET /health returns 200, 2) POST /api/todos creates a todo, 3) GET /api/todos returns the created todo, 4) PUT /api/todos/:id toggles completion, 5) DELETE /api/todos/:id removes it, 6) GET /api/todos returns empty array.",
+      "description": "Start the server, then verify all CRUD operations via curl: 1) GET /health returns 200, 2) POST /api/todos creates a todo, 3) GET /api/todos returns the created todo, 4) PUT /api/todos/:id toggles completion, 5) DELETE /api/todos/:id removes it, 6) GET /api/todos returns empty array. Stop the server after tests.",
       "status": "pending",
       "assigned_to": null,
       "depends_on": ["F-004"],
@@ -520,7 +685,7 @@ git commit -m "feat: add todo-app example with 5 pre-filled features"
 
 ---
 
-### Task 13: Example demo — README
+### Task 12: Example — TODO app README
 
 **Files:**
 
@@ -528,18 +693,27 @@ git commit -m "feat: add todo-app example with 5 pre-filled features"
 
 **Step 1: Write example README**
 
-Short instructions: copy feature_list.json to root, run `./scripts/run.sh`, what to expect. ~30 lines.
+Content (~30 lines):
+
+- What this example builds (a simple Express + vanilla JS TODO app)
+- How to run it:
+  1. `mkdir -p /tmp/todo-demo && cd /tmp/todo-demo && git init`
+  2. `cd /path/to/auto-dev-team`
+  3. `./scripts/init-project.sh todo-demo /tmp/todo-demo`
+  4. `cp examples/todo-app/feature_list.json projects/todo-demo/feature_list.json`
+  5. `./scripts/run.sh todo-demo`
+- What to expect (5 features built sequentially, QA validation at the end)
 
 **Step 2: Commit**
 
 ```bash
 git add examples/todo-app/README.md
-git commit -m "docs: add todo-app example readme"
+git commit -m "docs: add todo-app example instructions"
 ```
 
 ---
 
-### Task 14: Project README
+### Task 13: Project README
 
 **Files:**
 
@@ -547,17 +721,18 @@ git commit -m "docs: add todo-app example readme"
 
 **Step 1: Write README.md**
 
-Sections:
+Sections (~120 lines):
 
-1. **What is this** — one-paragraph overview
-2. **Prerequisites** — Claude Code CLI installed
-3. **Quick Start** — fork → fill features → run
-4. **How It Works** — state machine diagram, agent roles
-5. **Configuration** — team.json, custom agents
-6. **Example** — link to examples/todo-app
-7. **Feature List Schema** — field reference table
-
-~100-150 lines.
+1. **auto-dev-team** — one-line tagline + one-paragraph description
+2. **How It Works** — diagram: run.sh → assemble prompt → Claude Code → Agent Team → target project
+3. **Prerequisites** — Claude Code CLI, jq, git
+4. **Quick Start** — 4 commands to get running
+5. **Registering a Project** — init-project.sh usage
+6. **Writing Features** — feature_list.json schema with field reference table
+7. **Agent Roles** — Lead, Backend, Frontend, QA descriptions
+8. **Custom Agents** — how to add to team.json + create prompt file
+9. **Examples** — link to examples/todo-app/
+10. **Configuration** — team.json reference
 
 **Step 2: Commit**
 
@@ -568,36 +743,44 @@ git commit -m "docs: add project README"
 
 ---
 
-### Task 15: Final verification
+### Task 14: Final verification
 
-**Step 1: Run init.sh against the example**
-
-```bash
-cp examples/todo-app/feature_list.json feature_list.json
-source scripts/init.sh
-```
-
-Expected: "Environment OK (5 features loaded)"
-
-**Step 2: Restore template feature_list.json**
+**Step 1: Verify all files present**
 
 ```bash
-git checkout feature_list.json
-```
-
-**Step 3: Verify all files present**
-
-```bash
-ls -la CLAUDE.md feature_list.json progress.log team.json
-ls -la .claude/agents/
-ls -la .claude/settings.local.json
+ls -la agents/
 ls -la scripts/
 ls -la examples/todo-app/
+cat team.json | jq .
+cat protocol.md | head -5
 ```
 
-**Step 4: Final commit if any cleanup needed**
+**Step 2: Test init-project.sh**
+
+```bash
+mkdir -p /tmp/auto-dev-test && git -C /tmp/auto-dev-test init
+./scripts/init-project.sh test-project /tmp/auto-dev-test
+ls -la projects/test-project/
+cat projects/test-project/config.json | jq .
+```
+
+**Step 3: Test check-env.sh with example features**
+
+```bash
+cp examples/todo-app/feature_list.json projects/test-project/feature_list.json
+./scripts/check-env.sh test-project
+```
+
+Expected output: "Environment OK" with 5 features loaded.
+
+**Step 4: Clean up test project**
+
+```bash
+rm -rf projects/test-project /tmp/auto-dev-test
+```
+
+**Step 5: Final commit if any cleanup needed**
 
 ```bash
 git status
-# If clean, done. If not, commit remaining changes.
 ```
