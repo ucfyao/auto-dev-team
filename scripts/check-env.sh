@@ -24,6 +24,33 @@ if ! command -v git &> /dev/null; then
     exit 1
 fi
 
+# Check CLI tools for all configured engines
+ENGINES_JSON="$TOOL_DIR/team.json"
+if [ -f "$ENGINES_JSON" ]; then
+    # Extract unique engine commands used by agents
+    USED_ENGINES=$(jq -r '[.agents[].engine] | unique[]' "$ENGINES_JSON")
+
+    for eng in $USED_ENGINES; do
+        CLI_CMD=$(jq -r --arg e "$eng" '.engines[$e].command' "$ENGINES_JSON" | awk '{print $1}')
+        if [ -z "$CLI_CMD" ] || [ "$CLI_CMD" = "null" ]; then
+            echo "WARNING: Engine '$eng' referenced by agents but not defined in team.json engines."
+            continue
+        fi
+        if ! command -v "$CLI_CMD" &> /dev/null; then
+            echo "ERROR: CLI tool '$CLI_CMD' not found (required by engine '$eng')."
+            echo "Install it before running auto-dev-team."
+            exit 1
+        fi
+        echo "  Engine '$eng': $CLI_CMD ✓"
+    done
+fi
+
+# Check filter-prompt.sh
+if [ ! -x "$TOOL_DIR/scripts/filter-prompt.sh" ]; then
+    echo "ERROR: scripts/filter-prompt.sh not found or not executable."
+    exit 1
+fi
+
 # Check project config exists
 if [ -z "$PROJECT_NAME" ]; then
     echo "ERROR: No project name provided."
