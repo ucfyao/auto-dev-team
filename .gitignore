@@ -1,0 +1,11 @@
+node_modules/
+.env
+.env.local
+.DS_Store
+*.tmp
+
+# Ignore generated prompt files
+/tmp/
+
+# Keep project state directories but ignore generated logs
+# (progress.log is tracked per-project)
