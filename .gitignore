@@ -9,3 +9,9 @@ node_modules/
 
 # Keep project state directories but ignore generated logs
 # (progress.log is tracked per-project)
+
+# Git worktrees
+.worktrees/
+
+# Design docs and plans (local only)
+docs/plans/
