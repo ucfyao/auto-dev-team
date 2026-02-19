@@ -1,0 +1,7 @@
+Build a blog application with:
+- Express.js backend server with health endpoint
+- Blog post CRUD API (title, content, author, timestamps)
+- User authentication with JWT (register, login, logout)
+- Login page with email/password form
+- Blog post list page with create/edit/delete
+- Comment system on blog posts (requires both auth and posts)

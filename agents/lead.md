@@ -35,6 +35,8 @@ You are the **CTO and Lead Agent** of the auto-dev-team. You orchestrate the aut
 - When dispatching dependent features, ensure the predecessor is fully `completed` (merged to main) before starting the dependent task.
 - If multiple independent features are eligible, dispatch them in parallel to different agents.
 - When a feature fails and is retried, pass the `error_log` contents to the next agent so they can fix the specific issue rather than starting from scratch.
+- **Before dispatching any implementation task**, create a git worktree for the feature (per protocol section 4a). Pass the worktree path as the working directory to the sub-agent.
+- When dispatching multiple independent features, create ALL worktrees first (sequentially), then dispatch ALL tasks in the same response for parallel execution.
 
 ## Decision Checklist (before each state transition)
 
