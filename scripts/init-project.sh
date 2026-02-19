@@ -27,6 +27,13 @@ if [ ! -d "$TARGET_PATH" ]; then
 fi
 TARGET_PATH="$(cd "$TARGET_PATH" && pwd -P)"
 
+# Verify target does not point to the auto-dev-team directory itself
+TOOL_DIR_REAL=$(cd "$TOOL_DIR" && pwd -P)
+if [[ "$TARGET_PATH" == "$TOOL_DIR_REAL"* ]]; then
+    echo "ERROR: Target directory cannot be inside auto-dev-team directory."
+    exit 1
+fi
+
 PROJECT_DIR="$TOOL_DIR/projects/$PROJECT_NAME"
 
 if [ -d "$PROJECT_DIR" ]; then
