@@ -1,0 +1,64 @@
+#!/bin/bash
+set -e
+
+TOOL_DIR="$(cd "$(dirname "$0")" && pwd)"
+COMMAND="$1"
+
+usage() {
+    cat << 'EOF'
+auto-dev — Autonomous feature development powered by AI agent teams
+
+Usage:
+  auto-dev <command> [arguments]
+
+Commands:
+  init   <name> <path>               Register a target project
+  plan   <name> "<requirement>"       AI decomposes requirement into feature list
+  run    <name>                       Execute all features autonomously
+  status <name>                       Show feature statuses
+  resume <name>                       Resume after crash
+
+Workflow:
+  auto-dev init   my-app /tmp/my-app
+  auto-dev plan   my-app "Build a todo app with Express and vanilla JS"
+  auto-dev run    my-app
+
+One-liner (plan + run):
+  auto-dev plan my-app "Build a todo app..." --run
+
+Options:
+  --help    Show this help message
+EOF
+}
+
+case "$COMMAND" in
+    init)
+        shift
+        exec "$TOOL_DIR/scripts/init-project.sh" "$@"
+        ;;
+    plan)
+        shift
+        exec "$TOOL_DIR/scripts/plan.sh" "$@"
+        ;;
+    run)
+        shift
+        exec "$TOOL_DIR/scripts/run.sh" "$@"
+        ;;
+    status)
+        shift
+        exec "$TOOL_DIR/scripts/status.sh" "$@"
+        ;;
+    resume)
+        shift
+        exec "$TOOL_DIR/scripts/resume.sh" "$@"
+        ;;
+    --help|-h|"")
+        usage
+        ;;
+    *)
+        echo "ERROR: Unknown command '$COMMAND'"
+        echo ""
+        usage
+        exit 1
+        ;;
+esac

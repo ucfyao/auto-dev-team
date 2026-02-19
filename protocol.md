@@ -34,7 +34,8 @@ On session start, scan `feature_list.json` for orphaned tasks:
 5. **Termination check**: If no features are `"pending"` with satisfiable dependencies AND none are `"in_progress"` or `"testing"`, the session is done.
 6. Sort eligible tasks by `priority` ascending (lower number = higher priority).
 7. Match `category` to agent role: `"backend"` → Backend Agent, `"frontend"` → Frontend Agent. Custom categories map to agents listed in team.json's `custom_agents`.
-8. Multiple independent tasks (no dependency relationship) CAN be dispatched in parallel to different agents.
+8. Resolve engine for the matched agent: check `feature.engine` first, then `agent.engine` from team.json, then default `"claude"`.
+9. Multiple independent tasks (no dependency relationship) CAN be dispatched in parallel to different agents.
 
 ## 5. Agent Spawning
 
@@ -49,6 +50,91 @@ Each Task call must include in its prompt:
 - Instructions to return a clear status report (success/failure, what was done, any errors)
 
 Run the Task tool with `mode: "bypassPermissions"` so sub-agents can write files and run commands.
+
+## 5b. Engine Dispatch
+
+When dispatching a task, determine which engine to use:
+
+1. If the feature has an `engine` field → use that (feature-level override).
+2. Otherwise, look up the agent's `engine` field in team.json.
+3. If neither is set → default to `"claude"`.
+
+### Dispatching to engine: "claude"
+
+Use the **Task tool** as before:
+- `subagent_type: "general-purpose"`, `mode: "bypassPermissions"`
+- Pass the agent's prompt (filtered for claude via `scripts/filter-prompt.sh`) + feature details
+- Read the structured return value
+
+### Dispatching to engine: "codex"
+
+Use the **Bash tool** to invoke Codex CLI:
+
+1. Prepare the feature branch:
+   ```bash
+   cd {{TARGET_PROJECT_PATH}}
+   git checkout main && git pull origin main
+   git checkout -b feature/F-XXX
+   ```
+
+2. Write the filtered prompt + feature details to a temp file:
+   ```bash
+   cat > /tmp/codex-prompt-F-XXX.txt << 'PROMPT'
+   <filtered agent prompt via scripts/filter-prompt.sh agents/<role>.md codex>
+
+   ## Task
+   - Feature ID: F-XXX
+   - Title: <title>
+   - Description: <description>
+   - Target project: {{TARGET_PROJECT_PATH}}
+   - Branch: feature/F-XXX
+   <error context if retrying>
+   PROMPT
+   ```
+
+3. Execute:
+   ```bash
+   cd {{TARGET_PROJECT_PATH}} && \
+   timeout 600 codex -q --full-auto \
+     -f /tmp/codex-prompt-F-XXX.txt \
+     2>&1 | tee /tmp/codex-output-F-XXX.txt
+   CODEX_EXIT=$?
+   ```
+
+4. Check results:
+   ```bash
+   # Check exit code
+   echo "Exit code: $CODEX_EXIT"
+
+   # Check for new commits on branch
+   git log feature/F-XXX --not main --oneline
+
+   # Run project tests
+   <project test command, e.g., npm test>
+   ```
+
+5. Determine outcome:
+   - Exit code 0 AND new commits AND tests pass → SUCCESS
+   - Otherwise → FAILURE (record codex output in error_log)
+
+6. Clean up:
+   ```bash
+   rm -f /tmp/codex-prompt-F-XXX.txt /tmp/codex-output-F-XXX.txt
+   ```
+
+### Dispatching to engine: "auto"
+
+Lead Agent decides based on complexity:
+- Multi-file coordination, architecture changes, >500 char description, >2 dependencies → `claude`
+- Single-file, CRUD, tests, formatting, simple additions → `codex`
+- Uncertain → `claude` (safe fallback)
+
+### Adding New Engines
+
+To add a new engine (e.g., gemini):
+1. Add to `engines` in team.json with its CLI command.
+2. Add `<!-- engine:gemini -->` blocks to relevant agent prompts.
+3. Add a "Dispatching to engine: gemini" section here following the codex pattern.
 
 ## 6. State File Ownership
 
@@ -113,6 +199,7 @@ pending → in_progress → testing → merging → completed
   git branch -d feature/F-XXX 2>/dev/null || true
   ```
 - **Merge to main is REQUIRED** before a feature is `completed` — dependent features branch from main and need predecessor code
+- **Codex engine branch handling**: The Lead Agent creates the branch BEFORE dispatching to Codex. Codex works on the already-checked-out branch. The Lead Agent verifies commits exist on the branch AFTER Codex returns.
 
 ## 9. Progress Logging
 

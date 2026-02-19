@@ -1,10 +1,21 @@
 {
   "team_name": "auto-dev",
   "description": "Informational team config — injected into Lead Agent prompt as context. Not consumed by Claude Code directly.",
+  "engines": {
+    "claude": {
+      "command": "claude -p --dangerously-skip-permissions",
+      "description": "Claude Code CLI — best for complex, multi-file, architectural tasks"
+    },
+    "codex": {
+      "command": "codex -q --full-auto",
+      "description": "Codex CLI — best for focused implementation, tests, simple CRUD"
+    }
+  },
   "agents": [
     {
       "name": "lead",
       "role": "CTO / Lead Agent",
+      "engine": "claude",
       "prompt_file": "agents/lead.md",
       "capabilities": ["read", "plan", "delegate", "update state files"],
       "does_not": ["write code directly"]
@@ -12,23 +23,26 @@
     {
       "name": "backend",
       "role": "Backend Specialist",
+      "engine": "codex",
       "prompt_file": "agents/backend.md",
       "focus": ["API", "database", "server logic"],
-      "spawned_via": "Task tool with subagent_type: general-purpose"
+      "spawned_via": "Determined by engine field"
     },
     {
       "name": "frontend",
       "role": "Frontend Specialist",
+      "engine": "claude",
       "prompt_file": "agents/frontend.md",
       "focus": ["UI", "components", "styling", "client state"],
-      "spawned_via": "Task tool with subagent_type: general-purpose"
+      "spawned_via": "Determined by engine field"
     },
     {
       "name": "qa",
       "role": "QA Engineer",
+      "engine": "codex",
       "prompt_file": "agents/qa.md",
       "focus": ["testing", "validation", "bug reporting"],
-      "spawned_via": "Task tool with subagent_type: general-purpose",
+      "spawned_via": "Determined by engine field",
       "does_not": ["fix code — reports failures back to Lead"]
     }
   ],

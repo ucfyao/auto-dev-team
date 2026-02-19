@@ -1,15 +1,15 @@
 # auto-dev-team
 
-Autonomous feature development powered by a Claude Code Agent Team. Point it at any project, define features, and let the agents build them.
+Autonomous feature development powered by AI agent teams. Define features, assign engines, and let the agents build your project.
 
-auto-dev-team is a standalone orchestration tool that assembles a system prompt from protocol files and agent definitions, then launches Claude Code to autonomously implement features in your target project. A Lead Agent coordinates specialist agents (Backend, Frontend, QA) that are spawned as sub-agents via the Task tool.
+auto-dev-team is a standalone orchestration tool that assembles a system prompt from protocol files and agent definitions, then launches AI CLI tools to autonomously implement features in your target project. A Lead Agent (CTO) coordinates specialist agents (Backend, Frontend, QA), each of which can run on a different AI engine.
 
 ## How It Works
 
 ```
 ┌─────────────┐     ┌──────────────────┐     ┌─────────────────────┐
 │  run.sh     │────▶│ Assemble prompt  │────▶│  Claude Code CLI    │
-│  (entry)    │     │ to temp file     │     │  (stdin pipe)       │
+│  (entry)    │     │ + engine config  │     │  (Lead Agent)       │
 └─────────────┘     └──────────────────┘     └─────────┬───────────┘
                                                        │
                                               ┌────────▼────────┐
@@ -17,11 +17,12 @@ auto-dev-team is a standalone orchestration tool that assembles a system prompt 
                                               │   (CTO)         │
                                               └──┬─────┬─────┬──┘
                                                  │     │     │
+                                  engine:claude  │     │     │  engine:codex
                                         ┌────────┘     │     └────────┐
                                         ▼              ▼              ▼
                                    ┌─────────┐  ┌──────────┐  ┌──────────┐
                                    │ Backend │  │ Frontend │  │    QA    │
-                                   │  Agent  │  │  Agent   │  │  Agent   │
+                                   │ (Codex) │  │ (Claude) │  │ (Codex)  │
                                    └─────────┘  └──────────┘  └──────────┘
                                         │              │              │
                                         └──────────────┼──────────────┘
@@ -31,63 +32,254 @@ auto-dev-team is a standalone orchestration tool that assembles a system prompt 
                                               └─────────────────┘
 ```
 
+## Key Features
+
+- **One command from idea to code** — `auto-dev plan` decomposes requirements into features, `auto-dev run` builds them
+- **Multi-engine dispatch** — Each agent role can run on a different AI CLI tool (Claude Code, Codex CLI, etc.)
+- **Dependency-aware scheduling** — Features are dispatched in dependency order, independent features run in parallel
+- **Automatic retry** — Failed features retry up to `max_attempts` with error context passed to the next attempt
+- **PR workflow** — Every feature goes through branch → implement → QA → PR → squash merge
+- **Crash recovery** — Resume interrupted sessions without losing progress
+
 ## Prerequisites
 
 - **Claude Code CLI**: `npm install -g @anthropic-ai/claude-code`
 - **jq**: `brew install jq` (macOS) or `apt install jq` (Linux)
 - **git**: Any recent version
+- **gh** (GitHub CLI): Required for PR creation and merge
+
+Optional (for multi-engine):
+- **Codex CLI**: `npm install -g @openai/codex` (for `engine: "codex"`)
 
 ## Quick Start
 
+### Option A: Fully automatic (AI plans + builds)
+
 ```bash
 # 1. Create a target project
-mkdir -p /tmp/my-app && cd /tmp/my-app && git init
+mkdir -p /tmp/my-app && cd /tmp/my-app
+git init && git commit --allow-empty -m "chore: init"
 
-# 2. Initialize the project in auto-dev-team
+# 2. One command: plan + build
 cd /path/to/auto-dev-team
-./scripts/init-project.sh my-app /tmp/my-app
-
-# 3. Edit the feature list
-# Add your features to: projects/my-app/feature_list.json
-
-# 4. Run
-./scripts/run.sh my-app
+./auto-dev init my-app /tmp/my-app
+./auto-dev plan my-app "Build a todo app with Express backend and vanilla JS frontend" --run
 ```
 
-## Registering a Project
+### Option B: Manual feature list
 
 ```bash
-./scripts/init-project.sh <project-name> <target-project-path>
+# 1. Create and register project
+./auto-dev init my-app /tmp/my-app
+
+# 2. Write features manually
+# Edit: projects/my-app/feature_list.json
+
+# 3. Run
+./auto-dev run my-app
 ```
 
-This creates a project directory under `projects/<name>/` with:
+### CLI Reference
 
-- `config.json` — project configuration (target path, name, creation date)
-- `feature_list.json` — empty feature list to populate
-- `progress.log` — JSONL event log
+```
+auto-dev init   <name> <path>            Register a target project
+auto-dev plan   <name> "<requirement>"   AI decomposes requirement into features
+auto-dev run    <name>                   Execute all features autonomously
+auto-dev status <name>                   Show progress and feature statuses
+auto-dev resume <name>                   Resume after crash
+
+Flags:
+  plan --run    Automatically start execution after planning
+```
+
+### Check progress
+
+```bash
+./auto-dev status my-app
+
+# Output:
+# Project: my-app
+# Progress: 3/5 completed
+#   [##################------------] 60%
+#
+# Features:
+#   F-001  completed    Initialize Express server
+#   F-002  completed    CRUD API for todos
+#   F-003  completed    Todo list UI
+#   F-004  in_progress  Toggle and delete UI
+#   F-005  pending      Add CSS styling
+```
+
+## Example: Todo App
+
+A complete working example is included. It builds a full-stack todo app (Express + vanilla JS) with 4 features:
+
+```bash
+# Register
+./scripts/init-project.sh todo-demo /tmp/todo-demo
+
+# Copy example features
+cp examples/todo-app/feature_list.json projects/todo-demo/
+
+# Run
+./scripts/run.sh todo-demo
+
+# After completion, start the app:
+cd /tmp/todo-demo && npm start
+# Open http://localhost:3000
+```
+
+The 4 features built automatically:
+
+| Feature | Category | Description |
+|---------|----------|-------------|
+| F-001 | backend | Express server with /health endpoint |
+| F-002 | backend | CRUD REST API for todos (GET/POST/PUT/DELETE) |
+| F-003 | frontend | Todo list UI with add form |
+| F-004 | frontend | Toggle completion and delete buttons |
+
+## Project Structure
+
+```
+auto-dev-team/
+├── agents/
+│   ├── lead.md              # CTO — orchestrates, never writes code
+│   ├── backend.md           # Server-side specialist
+│   ├── frontend.md          # Client-side specialist
+│   └── qa.md                # Tester — validates, never fixes
+├── protocol.md              # Execution protocol injected into Lead Agent
+├── team.json                # Engine definitions + agent-to-engine mapping
+├── scripts/
+│   ├── run.sh               # Entry point — assembles prompt, launches session
+│   ├── init-project.sh      # Register a new target project
+│   ├── resume.sh            # Resume after crash
+│   ├── check-env.sh         # Validate prerequisites
+│   └── filter-prompt.sh     # Filter agent prompts by engine
+├── projects/                # Registered project configs + state
+│   └── <name>/
+│       ├── config.json
+│       ├── feature_list.json
+│       └── progress.log
+├── examples/
+│   └── todo-app/            # Example feature list
+└── docs/
+    └── plans/               # Design documents
+```
+
+## Multi-Engine Dispatch
+
+Each agent can run on a different AI CLI tool. Configure this in `team.json`:
+
+```json
+{
+  "engines": {
+    "claude": {
+      "command": "claude -p --dangerously-skip-permissions",
+      "description": "Best for complex, multi-file, architectural tasks"
+    },
+    "codex": {
+      "command": "codex -q --full-auto",
+      "description": "Best for focused implementation, tests, simple CRUD"
+    }
+  },
+  "agents": [
+    { "name": "lead",     "engine": "claude", "role": "CTO / Lead Agent" },
+    { "name": "backend",  "engine": "codex",  "role": "Backend Specialist" },
+    { "name": "frontend", "engine": "claude", "role": "Frontend Specialist" },
+    { "name": "qa",       "engine": "codex",  "role": "QA Engineer" }
+  ]
+}
+```
+
+### Engine Resolution
+
+Priority chain: **feature.engine** > **agent.engine** > default `"claude"`
+
+You can override the engine per feature:
+
+```json
+{
+  "id": "F-005",
+  "category": "backend",
+  "engine": "claude",
+  "title": "Complex auth refactor",
+  "description": "This needs Claude for multi-file coordination..."
+}
+```
+
+### Adding a New Engine
+
+1. Add to `engines` in `team.json`:
+   ```json
+   "gemini": { "command": "gemini -m gemini-2.5-pro", "description": "..." }
+   ```
+2. Add `<!-- engine:gemini -->` blocks to agent prompts
+3. Assign agents: `"engine": "gemini"`
+
+### Engine-Specific Prompts
+
+Agent prompts use marker blocks for engine-specific instructions:
+
+```markdown
+# Backend Specialist
+
+Shared instructions for all engines...
+
+<!-- engine:claude -->
+Claude-specific: use Read/Write/Edit tools, multi-step approach...
+<!-- /engine:claude -->
+
+<!-- engine:codex -->
+Codex-specific: work autonomously, commit and push when done...
+<!-- /engine:codex -->
+
+Shared completion criteria...
+```
+
+`scripts/filter-prompt.sh` strips non-matching blocks at dispatch time.
 
 ## Writing Features
 
-Edit `projects/<name>/feature_list.json` to define your features. Each feature has:
+Edit `projects/<name>/feature_list.json`:
+
+```json
+{
+  "project": "my-app",
+  "version": "3.1",
+  "features": [
+    {
+      "id": "F-001",
+      "category": "backend",
+      "title": "Initialize Express server",
+      "description": "Create Express.js server with GET /health on port 3000.",
+      "status": "pending",
+      "assigned_to": null,
+      "depends_on": [],
+      "priority": 1,
+      "attempts": 0,
+      "max_attempts": 3,
+      "branch": null,
+      "created_at": "2026-02-19",
+      "started_at": null,
+      "completed_at": null,
+      "error_log": [],
+      "notes": ""
+    }
+  ]
+}
+```
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `id` | string | Unique identifier (e.g., `"F-001"`) |
 | `category` | string | Agent routing: `"backend"`, `"frontend"`, or custom |
+| `engine` | string\|null | Optional engine override (`"claude"`, `"codex"`, `"auto"`) |
 | `title` | string | Short feature title |
 | `description` | string | Detailed implementation instructions |
 | `status` | string | Current state (see Status Lifecycle) |
-| `assigned_to` | string\|null | Agent currently working on this |
 | `depends_on` | string[] | Feature IDs that must complete first |
 | `priority` | number | Dispatch order (lower = higher priority) |
-| `attempts` | number | Number of implementation attempts |
 | `max_attempts` | number | Max retries before blocking |
-| `branch` | string\|null | Git branch name for this feature |
-| `created_at` | string | Creation date |
-| `started_at` | string\|null | ISO timestamp when work began |
-| `completed_at` | string\|null | Completion date |
-| `error_log` | string[] | Error messages from failed attempts |
-| `notes` | string | Optional notes |
 
 ## Status Lifecycle
 
@@ -101,63 +293,47 @@ pending → in_progress → testing → merging → completed
 Terminal states: completed, blocked, cancelled
 ```
 
-- **pending**: Ready to be assigned (or waiting for dependencies)
-- **in_progress**: An agent is implementing the feature
-- **testing**: QA agent is validating the implementation
-- **merging**: Feature branch is being merged to main
-- **completed**: Merged to main, all tests pass
-- **failed**: Implementation or tests failed (will retry)
-- **blocked**: Max attempts reached or dependency is blocked
-- **cancelled**: Manually cancelled
-
 ## Agent Roles
 
-| Agent | Role | Spawned Via |
-|-------|------|-------------|
-| **Lead** | CTO / Orchestrator. Reads protocol, dispatches tasks, updates state. Never writes code. | Runs as the main Claude Code session |
-| **Backend** | Server-side specialist. API routes, database, business logic. | `Task` tool with `subagent_type: "general-purpose"` |
-| **Frontend** | Client-side specialist. UI, components, styling, state. | `Task` tool with `subagent_type: "general-purpose"` |
-| **QA** | Tester. Validates features on branch, reports pass/fail. Does not fix code. | `Task` tool with `subagent_type: "general-purpose"` |
+| Agent | Role | Engine (default) |
+|-------|------|------------------|
+| **Lead** | CTO / Orchestrator. Reads protocol, dispatches tasks, updates state. Never writes code. | claude |
+| **Backend** | Server-side specialist. API routes, database, business logic. | configurable |
+| **Frontend** | Client-side specialist. UI, components, styling, state. | configurable |
+| **QA** | Tester. Validates features on branch, reports pass/fail. Does not fix code. | configurable |
 
 ## Custom Agents
 
-To add a custom specialist:
-
 1. Create a prompt file: `agents/<name>.md`
-2. Add the agent to `team.json` under `custom_agents`:
+2. Add the agent to `team.json`:
    ```json
    {
      "name": "devops",
      "role": "DevOps Specialist",
+     "engine": "codex",
      "prompt_file": "agents/devops.md",
      "focus": ["CI/CD", "deployment", "infrastructure"]
    }
    ```
-3. Use the matching category name in your features: `"category": "devops"`
+3. Use the matching category in features: `"category": "devops"`
 
 ## Resuming After a Crash
-
-If a session crashes, tasks may be stuck in `in_progress` or `testing`:
 
 ```bash
 ./scripts/resume.sh <project-name>
 ```
 
-This resets orphaned tasks to `pending` and re-launches the session.
-
-## Examples
-
-See [`examples/todo-app/`](examples/todo-app/) for a complete example that builds a simple Express + vanilla JS todo application.
-
-## Configuration
-
-`team.json` defines the agent team structure. This file is **informational context** — it is injected into the Lead Agent's prompt so it knows which agents are available and their capabilities. It is NOT consumed by Claude Code's native team system.
+Resets orphaned `in_progress`/`testing` tasks to `pending` and re-launches.
 
 ## Security Note
 
-auto-dev-team runs Claude Code with `--dangerously-skip-permissions`, which allows the AI to execute arbitrary commands in the target project directory without confirmation prompts. This is necessary for autonomous operation but means:
+auto-dev-team runs Claude Code with `--dangerously-skip-permissions`, which allows the AI to execute arbitrary commands. This is necessary for autonomous operation but means:
 
 - Only run on projects you trust
-- `feature_list.json` is treated as trusted input — do not accept feature definitions from untrusted sources
+- `feature_list.json` is treated as trusted input
 - Review generated code before deploying to production
-- Consider running in a sandboxed environment (container, VM) for additional safety
+- Consider running in a sandboxed environment (container, VM)
+
+## License
+
+MIT
