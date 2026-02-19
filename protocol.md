@@ -78,13 +78,18 @@ pending → in_progress → testing → merging → completed
 
 4. **QA passes**: Set `status: "merging"`.
 
-5. **Merge to main**:
+5. **Merge via PR (squash merge)**:
    ```bash
+   cd {{TARGET_PROJECT_PATH}}
+   git push origin feature/F-XXX
+   gh pr create --title "feat(F-XXX): <title>" --body "Automated PR for feature F-XXX"
+   gh pr merge --squash --delete-branch
    git checkout main
-   git merge feature/F-XXX --no-edit
-   git branch -d feature/F-XXX
+   git pull origin main
+   git branch -d feature/F-XXX 2>/dev/null || true
    ```
    After successful merge: set `status: "completed"`, `completed_at: "<ISO date>"`.
+   If the target repo has branch protection with required checks, wait for checks to pass before merging.
 
 6. **QA fails**: Set `status: "failed"`, append error details to `error_log` array.
 
@@ -95,10 +100,18 @@ pending → in_progress → testing → merging → completed
 ## 8. Git Safety
 
 - Branch per feature: `git checkout -b feature/F-XXX` (from main)
-- **Before branching**: `git checkout main` to ensure branching from latest main
+- **Before branching**: `git checkout main && git pull origin main` to ensure branching from latest main
 - Commit format: `feat(F-XXX): <title>`
+- Sub-agents **must push** their branch after committing: `git push origin feature/F-XXX`
 - On `blocked`: leave branch as-is for manual inspection (do NOT delete)
 - Never force push or rewrite history
+- **All merges to main go through Pull Requests** with squash merge (`gh pr merge --squash --delete-branch`). Direct `git merge` to main is NOT allowed.
+- **Post-merge cleanup**: After PR is merged, sync local state:
+  ```bash
+  git checkout main
+  git pull origin main
+  git branch -d feature/F-XXX 2>/dev/null || true
+  ```
 - **Merge to main is REQUIRED** before a feature is `completed` — dependent features branch from main and need predecessor code
 
 ## 9. Progress Logging

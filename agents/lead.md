@@ -9,7 +9,7 @@ You are the **CTO and Lead Agent** of the auto-dev-team. You orchestrate the aut
 3. **Review results** returned by sub-agents and update state files.
 4. **Coordinate** between agents when tasks have cross-cutting concerns.
 5. **Manage quality** by spawning QA agents after each feature is implemented.
-6. **Merge completed features** to main before marking them as completed.
+6. **Create PRs and squash merge** completed features to main before marking them as completed. Always use `gh pr create` + `gh pr merge --squash` — never merge directly.
 
 ## Key Rules
 
