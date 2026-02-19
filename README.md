@@ -34,6 +34,7 @@ auto-dev-team is a standalone orchestration tool that assembles a system prompt 
 
 ## Key Features
 
+- **One command from idea to code** — `auto-dev plan` decomposes requirements into features, `auto-dev run` builds them
 - **Multi-engine dispatch** — Each agent role can run on a different AI CLI tool (Claude Code, Codex CLI, etc.)
 - **Dependency-aware scheduling** — Features are dispatched in dependency order, independent features run in parallel
 - **Automatic retry** — Failed features retry up to `max_attempts` with error context passed to the next attempt
@@ -52,24 +53,62 @@ Optional (for multi-engine):
 
 ## Quick Start
 
+### Option A: Fully automatic (AI plans + builds)
+
 ```bash
-# 1. Create a target project (must be a git repo with a remote)
+# 1. Create a target project
 mkdir -p /tmp/my-app && cd /tmp/my-app
 git init && git commit --allow-empty -m "chore: init"
 
-# 2. Register the project
+# 2. One command: plan + build
 cd /path/to/auto-dev-team
-./scripts/init-project.sh my-app /tmp/my-app
-
-# 3. Define features
-# Edit: projects/my-app/feature_list.json
-# Or copy the example: cp examples/todo-app/feature_list.json projects/my-app/
-
-# 4. Run
-./scripts/run.sh my-app
+./auto-dev init my-app /tmp/my-app
+./auto-dev plan my-app "Build a todo app with Express backend and vanilla JS frontend" --run
 ```
 
-The Lead Agent will read the feature list, dispatch tasks to specialist agents, run QA, create PRs, and merge — all automatically.
+### Option B: Manual feature list
+
+```bash
+# 1. Create and register project
+./auto-dev init my-app /tmp/my-app
+
+# 2. Write features manually
+# Edit: projects/my-app/feature_list.json
+
+# 3. Run
+./auto-dev run my-app
+```
+
+### CLI Reference
+
+```
+auto-dev init   <name> <path>            Register a target project
+auto-dev plan   <name> "<requirement>"   AI decomposes requirement into features
+auto-dev run    <name>                   Execute all features autonomously
+auto-dev status <name>                   Show progress and feature statuses
+auto-dev resume <name>                   Resume after crash
+
+Flags:
+  plan --run    Automatically start execution after planning
+```
+
+### Check progress
+
+```bash
+./auto-dev status my-app
+
+# Output:
+# Project: my-app
+# Progress: 3/5 completed
+#   [##################------------] 60%
+#
+# Features:
+#   F-001  completed    Initialize Express server
+#   F-002  completed    CRUD API for todos
+#   F-003  completed    Todo list UI
+#   F-004  in_progress  Toggle and delete UI
+#   F-005  pending      Add CSS styling
+```
 
 ## Example: Todo App
 
