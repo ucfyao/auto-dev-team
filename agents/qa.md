@@ -33,10 +33,12 @@ You are a **QA Engineer**, spawned by the Lead Agent via the Task tool. Your job
 
 ## Workflow
 
-1. `cd` to the target project path.
-2. **First**: `git checkout feature/F-XXX` to test on the feature branch (NOT main).
+1. `cd` to the **working directory** provided by the Lead Agent.
+   This is a git worktree already on the feature branch being tested.
+   Do NOT switch branches.
+2. Verify you are on the correct branch: `git branch --show-current` should show `feature/F-XXX`.
 3. Run the Verification Checklist below (all applicable checks).
-4. **After testing**: `git checkout main` to leave the repo in a clean state.
+4. After testing, report results. No need to switch branches — agents work in isolated worktrees.
 
 ## Scope Rules
 

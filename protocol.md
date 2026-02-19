@@ -37,6 +37,74 @@ On session start, scan `feature_list.json` for orphaned tasks:
 8. Resolve engine for the matched agent: check `feature.engine` first, then `agent.engine` from team.json, then default `"claude"`.
 9. Multiple independent tasks (no dependency relationship) CAN be dispatched in parallel to different agents.
 
+## 4a. Worktree Isolation (MUST follow)
+
+ALL feature implementations use git worktree for isolation. This ensures safety whether tasks are dispatched sequentially or in parallel.
+
+### Worktree creation (Lead Agent, sequential — one at a time)
+
+Before dispatching any implementation task:
+
+1. For each eligible feature, create a worktree:
+   - Check if branch `feature/F-XXX` already exists: `git branch --list feature/F-XXX`
+   - If branch exists (retry scenario): `git worktree add /tmp/auto-dev-{{PROJECT}}-F-XXX feature/F-XXX`
+   - If branch is new: `git worktree add /tmp/auto-dev-{{PROJECT}}-F-XXX -b feature/F-XXX`
+   - If the worktree path already exists (crashed run residue):
+     - Check if it belongs to this repo: `git worktree list --porcelain | grep /tmp/auto-dev-{{PROJECT}}-F-XXX`
+     - If yes: `git worktree remove --force /tmp/auto-dev-{{PROJECT}}-F-XXX`
+     - If no: use timestamped suffix: `/tmp/auto-dev-{{PROJECT}}-F-XXX-$(date +%s)`
+2. Create worktrees **sequentially** (one at a time) to avoid `.git/index.lock` contention.
+
+### Passing worktree to sub-agents
+
+When spawning a sub-agent via the Task tool, include the **worktree path** as the working directory. Agents must `cd` to this path and work there. They do NOT create branches — the worktree is already on the correct branch.
+
+Example Task prompt addition:
+```
+Working directory: /tmp/auto-dev-<project>-F-XXX
+cd to this directory before starting. This is a git worktree already on branch feature/F-XXX.
+Do NOT create or switch branches.
+```
+
+## 4b. Parallel Dispatch
+
+When multiple features are eligible (status=pending, all depends_on completed):
+
+1. Create worktrees for ALL eligible features (sequentially, per 4a)
+2. Dispatch Task calls for all prepared features **in the SAME response** to enable parallel execution
+3. Cap at `max_parallel` from config.json (default: 3) per dispatch cycle
+4. If eligible count exceeds `max_parallel`, dispatch the highest-priority batch first, then dispatch the next batch after the first completes
+
+**Best-effort**: Parallel dispatch relies on issuing multiple Task calls in one response. If you dispatch sequentially instead, the system still works correctly because each feature has its own isolated worktree.
+
+## 4c. Sequential Merge After Parallel Execution
+
+After parallel agents return results, merge PRs **one at a time** in priority order (lowest priority number first):
+
+1. For the highest-priority completed feature:
+   - Ensure branch is pushed: `git push origin feature/F-XXX` (from worktree)
+   - Create PR: `gh pr create --title "feat(F-XXX): <title>" --body "Automated PR for feature F-XXX"`
+   - Squash merge: `gh pr merge --squash --delete-branch`
+   - Sync main: `git checkout main && git pull origin main`
+
+2. Before merging the NEXT feature, rebase its branch onto updated main:
+   ```bash
+   cd /tmp/auto-dev-<project>-F-YYY
+   git fetch origin main
+   git rebase origin/main
+   git push --force-with-lease origin feature/F-YYY
+   ```
+
+3. If rebase produces conflicts:
+   - If <= 3 conflicting files: attempt to resolve, then continue
+   - If > 3 conflicting files: mark feature as `failed`, add to `error_log`: "Merge conflict with N files after parallel execution", apply retry logic
+
+4. After all merges complete, clean up ALL worktrees:
+   ```bash
+   git worktree remove /tmp/auto-dev-<project>-F-XXX
+   git branch -d feature/F-XXX 2>/dev/null || true
+   ```
+
 ## 5. Agent Spawning
 
 Use the **`Task` tool** with `subagent_type: "general-purpose"` for each specialist. **Do NOT use TeamCreate** — it is not available in this execution mode.

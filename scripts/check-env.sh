@@ -121,6 +121,31 @@ if [ -n "$(git -C "$TARGET" status --porcelain)" ]; then
     exit 1
 fi
 
+# Check git remote 'origin' exists
+if ! git -C "$TARGET" remote get-url origin &>/dev/null; then
+    echo "ERROR: Target project has no 'origin' remote."
+    echo "Add one: git -C $TARGET remote add origin <url>"
+    exit 1
+fi
+
+# Check GitHub CLI authentication
+if ! command -v gh &>/dev/null; then
+    echo "WARNING: GitHub CLI (gh) not found. PR workflow will fail."
+    echo "Install: https://cli.github.com/"
+elif ! gh auth status &>/dev/null 2>&1; then
+    echo "WARNING: GitHub CLI not authenticated. PR workflow will fail."
+    echo "Authenticate: gh auth login"
+fi
+
+# Validate max_parallel if present in config
+MAX_PARALLEL=$(jq -r '.max_parallel // empty' "$CONFIG" 2>/dev/null)
+if [ -n "$MAX_PARALLEL" ]; then
+    if ! [[ "$MAX_PARALLEL" =~ ^[1-9][0-9]*$ ]]; then
+        echo "ERROR: config.json max_parallel must be a positive integer (got: $MAX_PARALLEL)"
+        exit 1
+    fi
+fi
+
 echo "=== Environment OK ==="
 echo "  Tool dir:    $TOOL_DIR"
 echo "  Project:     $PROJECT_NAME"

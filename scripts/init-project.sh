@@ -51,7 +51,7 @@ jq -n \
   --arg target "$TARGET_PATH" \
   --arg name "$PROJECT_NAME" \
   --arg created "$(date '+%Y-%m-%d')" \
-  '{target: $target, name: $name, created_at: $created}' \
+  '{target: $target, name: $name, created_at: $created, max_parallel: 3}' \
   > "$PROJECT_DIR/config.json"
 
 # Create empty feature list using jq
